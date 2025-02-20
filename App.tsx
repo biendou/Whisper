@@ -1,4 +1,4 @@
-import { View, Text, Button } from "react-native"
+import { View, Text, Button, Alert, Modal, ActivityIndicator, ToastAndroid, ScrollView } from "react-native"
 import { initWhisper } from 'whisper.rn'
 import { useEffect, useRef, useState } from "react"
 import { Audio } from "expo-av";
@@ -7,78 +7,99 @@ import RNFS from "react-native-fs";
 import { FFmpegKit } from "ffmpeg-kit-react-native";
 import { Platform } from "react-native";
 
-const translation = async () => {
-          const whisperContext = await initWhisper({
-          filePath: require('./ggml-tiny.bin'),
-          })
-          const options = { 
-            // maxThreads: 8,
-            language: 'en',
-            realtimeAudioSec: 60*5,
-            realtimeAudioSliceSec: 5
-           }
-
-          const { stop, subscribe } = await whisperContext.transcribeRealtime(options)
-
-          subscribe(evt => {
-            const { isCapturing, data, processTime, recordingTime, slices } = evt
-            // const {ode, error, data: chunck, processTime: chunkProcessTime, recordingTime: Chunk recordTime} = slices
-
-            console.log(
-              `Realtime transcribing: ${isCapturing ? 'ON' : 'OFF'}\n` +
-                // The inference text result from audio record:
-                `Result: ${JSON.stringify(slices)}\n\n` +
-                `Process time: ${processTime}ms\n` +
-                `Recording time: ${recordingTime}ms`,
-            )
-            if (!isCapturing) console.log('Finished realtime transcribing')
-          })
-
-          // const sampleFilePath = './jfk.wav'
-          // const options = { language: 'en' }
-          // const { stop, promise } = whisperContext.transcribe(sampleFilePath, options)
-          // const { result } = await promise
-          //  return "Hello World"
-          // return result
-        }
+const MODEL_PATH = './ggml-tiny.bin'
 
 const App = () => {
+  const [isRealtime, setIsRealtime] = useState<boolean>(false)
   const [message, setMessage] = useState<string>("Hello World")
   const [isRecording, setIsRecording] = useState(false);
   const [recording, setRecording] = useState<Recording>();
   const [permissionResponse, requestPermission] = Audio.usePermissions();
   const [recognizedText, setRecognizedText] = useState<string>("");
+  const [realTimeText, setRealTimeText] = useState<string>("")
   const [isTranscribing, setIsTranscribing] = useState(false);
   const whisper = useRef<any>();
-  useEffect(
-     ()=> {
+  const realTimeStopRef = useRef<any>();
+  const [isRealtimeRecording, setIsRealTimeRecording] = useState<boolean>(false)
+  const [isModalVisible, setIsModalVisible] = useState<boolean>(false);
+  const [isError, setIsError] = useState<boolean>(false)
+  const [erroMessage, setErrorMessage] = useState<string>("")
 
-      translation()
-      // let counter = 0; 
-      // const intervalle = setInterval(
-      //   ()=>{
-      //     console.log(message)
-      //     setMessage(counter++)
-      //   }, 1000)
-      // return()=> clearInterval(intervalle)
+  useEffect(() => {
+    (async () => {
+      if (permissionResponse?.status !== 'granted') {
+        console.log('Requesting permission..');
+        await requestPermission();
+      }
+      try {
+        const context = await initWhisper({
+          filePath: require(MODEL_PATH),
+        });
+        whisper.current = context;
+      } catch (error) {
+        console.error(error)
+        setErrorMessage(JSON.stringify(error))
+        setIsError(true)
+        // Alert.alert("Error when Loading the model", JSON.stringify(error))
+      } finally {
+        ToastAndroid.show(
+          `Model ${MODEL_PATH} Loaded !`,
+          ToastAndroid.LONG)
+        // Alert.alert("model Loaded")
+      }
+    })();
+  }, []);
+
+  const StartRealTimeTranslation = async () => {
+    setRealTimeText("")
+    const whisperContext = whisper.current
+    const options = {
+      // maxThreads: 8,
+      language: 'en',
+      realtimeAudioSec: 60 * 5,
+      realtimeAudioSliceSec: 5
     }
-  ,[])
 
-  // useEffect(() => {
-  //   (async () => {
-  //     try {
-  //       const context = await initWhisper({
-  //         filePath: require('./ggml-tiny.bin'),
-  //       });
-  //       whisper.current = context;
-  //     } catch (error) {
-  //       console.error(error)
-  //     } finally {
-  //       console.log("model loaded")
-  //     }
+    const { stop, subscribe } = await whisperContext.transcribeRealtime(options)
+    realTimeStopRef.current = stop;
+    subscribe(event => {
+      const { isCapturing, data, processTime, recordingTime, slices } = event
+      // const {ode, error, data: chunck, processTime: chunkProcessTime, recordingTime: Chunk recordTime} = slices
+      setRealTimeText(data.result)
+      console.log(
+        `Realtime transcribing: ${isCapturing ? 'ON' : 'OFF'}\n` +
+        // The inference text result from audio record:
+        `Result: ${JSON.stringify(slices)}\n\n` +
+        `Process time: ${processTime}ms\n` +
+        `Recording time: ${recordingTime}ms`,
+      )
+      if (!isCapturing) {
+        setIsModalVisible(false)
+        setIsRealTimeRecording(false)
+        ToastAndroid.show(
+          'Finished realtime transcribing !',
+          ToastAndroid.LONG)
+        console.log('Finished realtime transcribing')
+      }
+    })
+    setIsRealTimeRecording(true)
+    ToastAndroid.show(
+      'Started realtime transcribing !',
+      ToastAndroid.LONG)
+    // const sampleFilePath = './jfk.wav'
+    // const options = { language: 'en' }
+    // const { stop, promise } = whisperContext.transcribe(sampleFilePath, options)
+    // const { result } = await promise
+    //  return "Hello World"
+    // return result
+  }
 
-  //   })();
-  // }, []);
+  const stopRealTimeTranslation = async () => {
+    setIsModalVisible(true)
+    await realTimeStopRef.current();
+  }
+
+
 
   const transcribeWithWhisper = (uri: string) =>
     new Promise(async (resolve, reject) => {
@@ -118,15 +139,19 @@ const App = () => {
     });
 
   const startRecording = async () => {
-    if (permissionResponse?.status !== 'granted') {
-      console.log('Requesting permission..');
-      await requestPermission();
-    }
+    // if (permissionResponse?.status !== 'granted') {
+    //   console.log('Requesting permission..');
+    //   await requestPermission();
+    // }
+    setRecognizedText("")
     await Audio.setAudioModeAsync({
       allowsRecordingIOS: true,
       playsInSilentModeIOS: true,
     });
 
+    ToastAndroid.show(
+      'Starting recording..',
+      ToastAndroid.LONG)
     console.log('Starting recording..');
 
     setIsRecording(true);
@@ -183,15 +208,65 @@ const App = () => {
       setMessage(uri + "")
       setIsRecording(false);
     }
-    
-  };
 
+  };
+  if (permissionResponse?.status == 'denied' || isError)
+    return (
+      <View style={{ alignItems: "center", justifyContent: "center", height: "100%", backgroundColor: "white", gap: 32, padding: 16 }}>
+        {isError ? <Text style={{ textAlign: "center",fontSize: 16 }}>{`An fatal error Happened, please try to restart the app \n\n\n ${erroMessage} `}</Text> : <Text>Please head to this app setup and grant the required permission to be able to use the app</Text>}
+      </View>
+    )
   return (
-    <View style={{ alignItems: "center", justifyContent: "center", height: "100%" }}>
-      <Button title={"Start"} onPress={startRecording}></Button>
-      <Button title={"Stop"} onPress={stopRecording}></Button>
-      <Text style={{ fontSize: 50 }}>{recognizedText}</Text>
-    </View>
+    <>
+      <View style={{ alignItems: "center", justifyContent: "center", height: "100%", backgroundColor: "white", gap: 32, padding: 16 }}>
+
+        <Button onPress={() => setIsRealtime(!isRealtime)} title={!isRealtime ? "Switch to Realtime Mode" : "Switch to Record Mode"}></Button>
+        {!isRealtime && (
+          <>
+            <View style={{ gap: 16 }}>
+              <Text style={{ fontSize: 32 }}>Recording Module</Text>
+              <Button title={"Start"} onPress={startRecording} disabled={isRecording}></Button>
+              <Button title={"Stop"} onPress={stopRecording} disabled={!isRecording}></Button>
+
+            </View>
+            <ScrollView style={{ backgroundColor: "grey", width: "100%" }}>
+              <View>
+                <Text style={{ fontSize: 18, color: "white" }}>{recognizedText}</Text>
+              </View>
+            </ScrollView>
+          </>
+        )
+        }
+        {isRealtime && (
+          <>
+            <View>
+              <Text style={{ fontSize: 32, textAlign: "center" }}>Real time translation Module</Text>
+            </View>
+            <View style={{ gap: 16, alignSelf: "center" }}>
+              <Button title={"Start realtime translation"} onPress={StartRealTimeTranslation} disabled={isRealtimeRecording}></Button>
+              <Button title={"Stop realtime translation"} onPress={stopRealTimeTranslation} disabled={!isRealtimeRecording}></Button>
+            </View>
+            <ScrollView style={{ backgroundColor: "grey", width: "100%" }}>
+              <View>
+                <Text style={{ fontSize: 18, color: "white" }}>{realTimeText}</Text>
+              </View>
+            </ScrollView>
+          </>
+        )
+        }
+
+
+      </View>
+      <Modal
+        visible={isModalVisible || isTranscribing}
+        transparent={true}
+        style={{ alignItems: "center", justifyContent: "center", height: "100%" }}
+      >
+        <View style={{ alignItems: "center", justifyContent: "center", height: "100%" }}>
+          <ActivityIndicator size="large" />
+        </View>
+      </Modal>
+    </>
   )
 }
 
