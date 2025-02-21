@@ -62,7 +62,7 @@ const App = () => {
 
     const { stop, subscribe } = await whisperContext.transcribeRealtime(options)
     realTimeStopRef.current = stop;
-    subscribe(event => {
+    subscribe((event: { isCapturing: any; data: any; processTime: any; recordingTime: any; slices: any; }) => {
       const { isCapturing, data, processTime, recordingTime, slices } = event
       // const {ode, error, data: chunck, processTime: chunkProcessTime, recordingTime: Chunk recordTime} = slices
       setRealTimeText(data.result)
@@ -114,7 +114,7 @@ const App = () => {
             language: "en",
             maxLen: 1,
             translate: true,
-            onProgress: (cur) => {
+            onProgress: (cur: number) => {
               if (cur < 100) {
                 setIsTranscribing(true);
               } else {
@@ -190,12 +190,49 @@ const App = () => {
     setRecording(recording);
   };
 
+  const [sound, setSound] = useState<any>();
+  const [status, setStatus] = useState<any>(null);
+
+  async function playSound() {
+    ToastAndroid.show(
+      'Loading Sound',
+      ToastAndroid.LONG)
+    console.log('Loading Sound');
+    const { sound } = await Audio.Sound.createAsync(
+      require('./jfk.wav') // Replace with your audio file path
+      ,
+      {},
+      (status) => setStatus(status)
+    );
+    setSound(sound);
+    ToastAndroid.show(
+      'Playing Sound',
+      ToastAndroid.LONG)
+    console.log('Playing Sound');
+    await sound.playAsync();
+    // setIsTranscribing(false)
+  }
+  async function pauseSound() {
+    if (sound) {
+       await sound.pauseAsync();
+    }
+ }
+
+  useEffect(() => {
+    return sound
+      ? () => {
+          console.log('Unloading Sound');
+          sound.unloadAsync();
+        }
+      : undefined;
+  }, [sound]);
+
   const stopRecording = async () => {
     let uri
     try {
-      const context = await initWhisper({
-        filePath: require('./ggml-tiny.bin'),
-      });
+      // const context = await initWhisper({
+      //   filePath: require('./ggml-tiny.bin'),
+      // });
       await recording?.stopAndUnloadAsync();
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: false,
@@ -210,10 +247,42 @@ const App = () => {
     }
 
   };
+
+  const converFile = async () => {
+    setRecognizedText("")
+    setIsTranscribing(true)
+    try {
+      ToastAndroid.show(
+        'Starting conversion..',
+        ToastAndroid.LONG)
+      const { stop, promise } = whisper.current?.transcribe(require('./jfk.wav'), {
+        language: "en",
+        maxLen: 1,
+        translate: true,
+        onProgress: (cur: number) => {
+          if (cur < 100) {
+            setIsTranscribing(true);
+          } else {
+            setIsTranscribing(false);
+          }
+        },
+      })
+      const res = await promise;
+      if (res?.result) {
+        const content = res.result    //.trim().replaceAll("[BLANK_AUDIO]", "");
+        setRecognizedText(content);
+      }
+    } catch (error) {
+      console.error("Error during the transcription", error)
+    } finally {
+      setIsTranscribing(false)
+    }
+  }
+  const isPlaying = status?.isPlaying
   if (permissionResponse?.status == 'denied' || isError)
     return (
       <View style={{ alignItems: "center", justifyContent: "center", height: "100%", backgroundColor: "white", gap: 32, padding: 16 }}>
-        {isError ? <Text style={{ textAlign: "center",fontSize: 16 }}>{`An fatal error Happened, please try to restart the app \n\n\n ${erroMessage} `}</Text> : <Text>Please head to this app setup and grant the required permission to be able to use the app</Text>}
+        {isError ? <Text style={{ textAlign: "center", fontSize: 16 }}>{`An fatal error Happened, please try to restart the app \n\n\n ${erroMessage} `}</Text> : <Text>Please head to this app setup and grant the required permission to be able to use the app</Text>}
       </View>
     )
   return (
@@ -225,9 +294,12 @@ const App = () => {
           <>
             <View style={{ gap: 16 }}>
               <Text style={{ fontSize: 32 }}>Recording Module</Text>
-              <Button title={"Start"} onPress={startRecording} disabled={isRecording}></Button>
-              <Button title={"Stop"} onPress={stopRecording} disabled={!isRecording}></Button>
-
+              <Button title={"Start"} onPress={startRecording} disabled={isRecording||isPlaying}></Button>
+              <Button title={"Stop"} onPress={stopRecording} disabled={!isRecording||isPlaying}></Button>
+              <View style={{flexDirection: "row", gap: 8}}>
+              <Button title={"Convert JFK sample"} onPress={converFile} disabled={isRecording||isPlaying}></Button>
+              <Button title={status?.isPlaying ? 'Stop' : 'Play'} onPress={status?.isPlaying ? pauseSound : playSound} disabled={isRecording}></Button>
+              </View>
             </View>
             <ScrollView style={{ backgroundColor: "grey", width: "100%" }}>
               <View>
