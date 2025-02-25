@@ -4,13 +4,32 @@ import { useEffect, useRef, useState } from "react"
 import { Audio } from "expo-av";
 import { Recording } from "expo-av/build/Audio";
 import RNFS from "react-native-fs";
-import { FFmpegKit } from "ffmpeg-kit-react-native";
+import { FFmpegKit, Statistics } from "ffmpeg-kit-react-native";
 import { Platform } from "react-native";
-
+import { io } from "socket.io-client";
 const MODEL_PATH = './ggml-tiny.bin'
 
+import AudioRecord from 'react-native-audio-record';
+
+const options = {
+  sampleRate: 16000,  // default 44100
+  channels: 1,        // 1 or 2, default 1
+  bitsPerSample: 16,  // 8 or 16, default 16
+  audioSource: 6,     // android only (see below)
+  wavFile: 'test.wav' // default 'audio.wav'
+};
+
+const downloadPath = `${RNFS.DocumentDirectoryPath}/downloaded_file`;
+
+const formatFileSize = (size: number) => {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(2)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(2)} MB`;
+};
+
 const App = () => {
-  const [isRealtime, setIsRealtime] = useState<boolean>(false)
+  const [isRealtime, setIsRealtime] = useState<boolean>(false);
+  const [showStatistics, setShowStatistics] = useState<boolean>(false)
   const [message, setMessage] = useState<string>("Hello World")
   const [isRecording, setIsRecording] = useState(false);
   const [recording, setRecording] = useState<Recording>();
@@ -24,6 +43,79 @@ const App = () => {
   const [isModalVisible, setIsModalVisible] = useState<boolean>(false);
   const [isError, setIsError] = useState<boolean>(false)
   const [erroMessage, setErrorMessage] = useState<string>("")
+  const [sound, setSound] = useState<any>();
+  const [status, setStatus] = useState<any>(null);
+  const statistics = useRef<{
+    isVisible: boolean,
+    recordinStartTime?: number,
+    recordingEndTime?: number,
+    uploaStartTime?: number,
+    updloadEndTime?: number,
+    downLoadEndTime?: number,
+    recordingDuration?: string,
+    transcriptionStartTime?: number,
+    transcriptionEndTime?: number,
+    fileSize?: string,
+    speechToTextTranslation?: string
+  }>({isVisible: false})
+  const socket = useRef<any>()
+
+
+  useEffect(
+    () => {
+      const connection = io("http://10.0.2.2:8000");
+
+      connection.on("download", async (fileData) => {
+        console.log("📥 Fichier reçu du serveur");
+
+        try {
+          // Convert Base64 to a file
+          if (typeof fileData !== "string") {
+            console.error("❌ Invalid data format. Expected a string but got:", typeof fileData);
+            return;
+          }
+          await RNFS.writeFile(downloadPath, fileData, "base64");
+          const fileStat = await RNFS.stat(downloadPath);
+          console.log("file stats", JSON.stringify(fileStat))
+          console.log(`Taille du fichier: ${formatFileSize(fileStat.size)}`);
+          statistics.current.fileSize = `${formatFileSize(fileStat.size)}`
+          console.log("✅ Fichier téléchargé avec succès:", downloadPath);
+          ToastAndroid.show(
+            `Successfully save the file ${downloadPath} on disk !`,
+            ToastAndroid.SHORT)
+          // Alert.alert("Téléchargement terminé", `Le fichier a été enregistré: ${downloadPath}`);
+
+        } catch (error) {
+          console.error("❌ Erreur lors du téléchargement du fichier:", error);
+          ToastAndroid.show(
+            `Error while saving the file ${downloadPath} on disk !`,
+            ToastAndroid.SHORT)
+          // Alert.alert("Erreur", "Impossible de télécharger le fichier.");
+        } finally {
+          statistics.current.downLoadEndTime = Date.now();
+        }
+      });
+      socket.current = connection
+    }
+    , [])
+
+
+  const startSocketStreaming = () => {
+    AudioRecord.init(options);
+    AudioRecord.on('data', data => {
+      console.log("data")
+    });
+
+    setIsRealTimeRecording(true)
+    AudioRecord.start();
+  }
+
+  const stopSocketStreaming = async () => {
+    const audioFile = await AudioRecord.stop();
+    console.log("file", audioFile)
+    setIsRealTimeRecording(false)
+  }
+
 
   useEffect(() => {
     (async () => {
@@ -104,6 +196,7 @@ const App = () => {
   const transcribeWithWhisper = (uri: string) =>
     new Promise(async (resolve, reject) => {
       try {
+        statistics.current.transcriptionStartTime = Date.now();
         if (Platform.OS === "android") {
           const sourceUri = uri;
           const targetFile = RNFS.DocumentDirectoryPath + "/newFile.wav"; // Example target directory
@@ -127,7 +220,7 @@ const App = () => {
 
           if (res?.result) {
             const content = res.result    //.trim().replaceAll("[BLANK_AUDIO]", "");
-
+            statistics.current.speechToTextTranslation = content
             setRecognizedText(content);
           }
 
@@ -135,6 +228,8 @@ const App = () => {
         }
       } catch (error) {
         reject(error);
+      } finally {
+        statistics.current.transcriptionEndTime = Date.now();
       }
     });
 
@@ -144,6 +239,8 @@ const App = () => {
     //   await requestPermission();
     // }
     setRecognizedText("")
+    statistics.current = {isVisible: true}
+    statistics.current.recordinStartTime = Date.now();
     await Audio.setAudioModeAsync({
       allowsRecordingIOS: true,
       playsInSilentModeIOS: true,
@@ -190,8 +287,7 @@ const App = () => {
     setRecording(recording);
   };
 
-  const [sound, setSound] = useState<any>();
-  const [status, setStatus] = useState<any>(null);
+
 
   async function playSound() {
     ToastAndroid.show(
@@ -214,16 +310,16 @@ const App = () => {
   }
   async function pauseSound() {
     if (sound) {
-       await sound.pauseAsync();
+      await sound.pauseAsync();
     }
- }
+  }
 
   useEffect(() => {
     return sound
       ? () => {
-          console.log('Unloading Sound');
-          sound.unloadAsync();
-        }
+        console.log('Unloading Sound');
+        sound.unloadAsync();
+      }
       : undefined;
   }, [sound]);
 
@@ -237,8 +333,12 @@ const App = () => {
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: false,
       });
+      statistics.current.recordingEndTime = Date.now()
       uri = recording?.getURI();
+      // console.log("uri ", uri)
+      await sendAudioToSocket(`${uri}`);
       await transcribeWithWhisper(uri as string);
+
     } catch (error) {
       console.error(error)
     } finally {
@@ -246,6 +346,33 @@ const App = () => {
       setIsRecording(false);
     }
 
+  };
+
+  const sendAudioToSocket = async (uri: string) => {
+    try {
+      // Read the file as base64
+      const base64Audio = await RNFS.readFile(uri.replace("file://", ""), "base64");
+      statistics.current.uploaStartTime = Date.now()
+      // Send audio data to the server
+      socket.current.emit("upload", base64Audio, (response: any) => {
+        if (response.message == "success") {
+
+          ToastAndroid.show(
+            'Message Uploaded Successfully !',
+            ToastAndroid.LONG)
+        } else {
+
+          ToastAndroid.show(
+            'Error when trying to upload message !',
+            ToastAndroid.LONG)
+        }
+        statistics.current.updloadEndTime = Date.now();
+      });
+      // socket.current.emit("upload", base64Audio);
+      console.log("Audio sent via Socket.IO!");
+    } catch (error) {
+      console.error("Error sending audio file:", error);
+    }
   };
 
   const converFile = async () => {
@@ -289,16 +416,17 @@ const App = () => {
     <>
       <View style={{ alignItems: "center", justifyContent: "center", height: "100%", backgroundColor: "white", gap: 32, padding: 16 }}>
 
-        <Button onPress={() => setIsRealtime(!isRealtime)} title={!isRealtime ? "Switch to Realtime Mode" : "Switch to Record Mode"}></Button>
+        <Button onPress={() => setIsRealtime(!isRealtime)} title={!isRealtime ? "Switch to Realtime Mode" : "Switch to Record Mode"} disabled={isRealtime ? isRealtimeRecording : isRecording || isPlaying}></Button>
         {!isRealtime && (
           <>
             <View style={{ gap: 16 }}>
               <Text style={{ fontSize: 32 }}>Recording Module</Text>
-              <Button title={"Start"} onPress={startRecording} disabled={isRecording||isPlaying}></Button>
-              <Button title={"Stop"} onPress={stopRecording} disabled={!isRecording||isPlaying}></Button>
-              <View style={{flexDirection: "row", gap: 8}}>
-              <Button title={"Convert JFK sample"} onPress={converFile} disabled={isRecording||isPlaying}></Button>
-              <Button title={status?.isPlaying ? 'Stop' : 'Play'} onPress={status?.isPlaying ? pauseSound : playSound} disabled={isRecording}></Button>
+              <Button title={"Start"} onPress={startRecording} disabled={isRecording || isPlaying}></Button>
+              <Button title={"Stop"} onPress={stopRecording} disabled={!isRecording || isPlaying}></Button>
+              {statistics.current.isVisible &&<Button title={"Show Last recording stats"} onPress={() => setShowStatistics(!showStatistics)}></Button>}
+              <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+                <Button title={"Convert JFK sample"} onPress={converFile} disabled={isRecording || isPlaying}></Button>
+                <Button title={status?.isPlaying ? 'Stop' : 'Play'} onPress={status?.isPlaying ? pauseSound : playSound} disabled={isRecording}></Button>
               </View>
             </View>
             <ScrollView style={{ backgroundColor: "grey", width: "100%" }}>
@@ -315,8 +443,12 @@ const App = () => {
               <Text style={{ fontSize: 32, textAlign: "center" }}>Real time translation Module</Text>
             </View>
             <View style={{ gap: 16, alignSelf: "center" }}>
-              <Button title={"Start realtime translation"} onPress={StartRealTimeTranslation} disabled={isRealtimeRecording}></Button>
-              <Button title={"Stop realtime translation"} onPress={stopRealTimeTranslation} disabled={!isRealtimeRecording}></Button>
+              <Button title={"Start realtime translation"} onPress={startSocketStreaming} ></Button>
+              <Button title={"Stop realtime translation"} onPress={stopSocketStreaming} ></Button>
+            </View>
+            <View style={{ gap: 16, alignSelf: "center" }}>
+              <Button title={"Start Socket streaming"} onPress={StartRealTimeTranslation} ></Button>
+              <Button title={"Stop Socket streaming"} onPress={stopRealTimeTranslation} ></Button>
             </View>
             <ScrollView style={{ backgroundColor: "grey", width: "100%" }}>
               <View>
@@ -336,6 +468,35 @@ const App = () => {
       >
         <View style={{ alignItems: "center", justifyContent: "center", height: "100%" }}>
           <ActivityIndicator size="large" />
+        </View>
+      </Modal>
+      <Modal
+        visible={showStatistics}
+        transparent={true}
+
+      >
+        <View style={{ alignItems: "center", justifyContent: "center", height: "100%", backgroundColor: "white" }}>
+          <Button title={"Close"} onPress={() => setShowStatistics(!showStatistics)}></Button>
+          <Text > Show statistics</Text>
+          <View style={{ paddingVertical: 16, gap: 8 }}>
+            <Text >{`recording duration: ${(statistics.current?.recordingEndTime - statistics.current?.recordinStartTime) / 1000} seconds`}</Text>
+            <Text >{`Upload duration: ${(statistics.current?.updloadEndTime - statistics.current?.uploaStartTime)} ms`}</Text>
+            <Text >{`Download duration: ${(-statistics.current?.updloadEndTime + statistics.current?.downLoadEndTime)} ms`}</Text>
+            <Text >{`Transcription duration: ${(-statistics.current?.transcriptionStartTime + statistics.current?.transcriptionEndTime)/1000} s`}</Text>
+            <Text >{`File Size: ${(statistics.current?.fileSize)}`}</Text>
+            <Text >{`Translation: ${(statistics.current?.speechToTextTranslation)}`}</Text>
+          </View>
+          <Text >{`Other Informations`}</Text>
+          <ScrollView contentContainerStyle={{ gap: 8 }}>
+
+
+            {
+              Object.entries(statistics.current).map((item) => {
+                return (<View key={`${item[0]}`} style= {{paddingVertical: 4}}><Text>{`${item[0]}  ${item[1]}`}</Text></View>)
+              })
+            }
+          </ScrollView>
+
         </View>
       </Modal>
     </>
