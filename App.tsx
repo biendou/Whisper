@@ -1,4 +1,4 @@
-import { View, Text, Button, Alert, Modal, ActivityIndicator, ToastAndroid, ScrollView } from "react-native"
+import { View, Text, Button, Alert, Modal, ActivityIndicator, ToastAndroid, ScrollView, TextInput } from "react-native"
 import { initWhisper } from 'whisper.rn'
 import { useEffect, useRef, useState } from "react"
 import { Audio } from "expo-av";
@@ -45,6 +45,8 @@ const App = () => {
   const [erroMessage, setErrorMessage] = useState<string>("")
   const [sound, setSound] = useState<any>();
   const [status, setStatus] = useState<any>(null);
+  const [isStreaming, setIsStreaming]= useState<boolean>(false)
+  const [isStreamingOnSocket, setIsStreamingOnSocket]= useState<boolean>(false)
   const statistics = useRef<{
     isVisible: boolean,
     recordinStartTime?: number,
@@ -101,9 +103,10 @@ const App = () => {
 
 
   const startSocketStreaming = () => {
+    setIsStreaming(!isStreaming)
     AudioRecord.init(options);
     AudioRecord.on('data', data => {
-      console.log("data")
+      socket.current.emit("stream", data)
     });
 
     setIsRealTimeRecording(true)
@@ -111,6 +114,7 @@ const App = () => {
   }
 
   const stopSocketStreaming = async () => {
+    setIsStreaming(!isStreaming)
     const audioFile = await AudioRecord.stop();
     console.log("file", audioFile)
     setIsRealTimeRecording(false)
@@ -143,6 +147,7 @@ const App = () => {
   }, []);
 
   const StartRealTimeTranslation = async () => {
+    setIsStreamingOnSocket(!isStreamingOnSocket)
     setRealTimeText("")
     const whisperContext = whisper.current
     const options = {
@@ -188,6 +193,7 @@ const App = () => {
 
   const stopRealTimeTranslation = async () => {
     setIsModalVisible(true)
+    setIsStreamingOnSocket(!isStreamingOnSocket)
     await realTimeStopRef.current();
   }
 
@@ -412,6 +418,8 @@ const App = () => {
         {isError ? <Text style={{ textAlign: "center", fontSize: 16 }}>{`An fatal error Happened, please try to restart the app \n\n\n ${erroMessage} `}</Text> : <Text>Please head to this app setup and grant the required permission to be able to use the app</Text>}
       </View>
     )
+    const [intent1, setIntent1] = useState<string>("")
+    const [intent2, setIntent2] = useState<string>("")
   return (
     <>
       <View style={{ alignItems: "center", justifyContent: "center", height: "100%", backgroundColor: "white", gap: 32, padding: 16 }}>
@@ -423,6 +431,10 @@ const App = () => {
               <Text style={{ fontSize: 32 }}>Recording Module</Text>
               <Button title={"Start"} onPress={startRecording} disabled={isRecording || isPlaying}></Button>
               <Button title={"Stop"} onPress={stopRecording} disabled={!isRecording || isPlaying}></Button>
+              <View style={{flexDirection: "row", gap: 8, alignItems: "stretch"}}>
+              <TextInput style={{backgroundColor: "grey", width: "56%", alignContent: "space-between"}} value={intent1} onChangeText={setIntent1 } placeholder="Please enter the intent" />
+              {!intent1.length?<Button title={"NA"} color={"grey"}></Button>:(recognizedText.toLowerCase().includes(intent1.toLowerCase())?<Button title={"detected"} color={"green"}></Button>:<Button title={"Non detected"} color={"red"}></Button>)}
+              </View>
               {statistics.current.isVisible &&<Button title={"Show Last recording stats"} onPress={() => setShowStatistics(!showStatistics)}></Button>}
               <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
                 <Button title={"Convert JFK sample"} onPress={converFile} disabled={isRecording || isPlaying}></Button>
@@ -443,13 +455,17 @@ const App = () => {
               <Text style={{ fontSize: 32, textAlign: "center" }}>Real time translation Module</Text>
             </View>
             <View style={{ gap: 16, alignSelf: "center" }}>
-              <Button title={"Start realtime translation"} onPress={startSocketStreaming} ></Button>
-              <Button title={"Stop realtime translation"} onPress={stopSocketStreaming} ></Button>
+              <Button title={"Start Socket streaming"} onPress={startSocketStreaming} disabled={isStreaming||isStreamingOnSocket} ></Button>
+              <Button title={"Stop Socket streaming"} onPress={stopSocketStreaming} disabled={!isStreaming||isStreamingOnSocket}></Button>
             </View>
             <View style={{ gap: 16, alignSelf: "center" }}>
-              <Button title={"Start Socket streaming"} onPress={StartRealTimeTranslation} ></Button>
-              <Button title={"Stop Socket streaming"} onPress={stopRealTimeTranslation} ></Button>
+              <Button title={"Start realtime translation"} onPress={StartRealTimeTranslation} disabled={isStreamingOnSocket||isStreaming}></Button>
+              <Button title={"Stop realtime translation"} onPress={stopRealTimeTranslation} disabled={!isStreamingOnSocket||isStreaming}></Button>
             </View>
+            <View style={{flexDirection: "row", gap: 8, alignItems: "stretch"}}>
+              <TextInput style={{backgroundColor: "grey", width: "56%", alignContent: "space-between"}} value={intent2} onChangeText={setIntent2 } placeholder="Please enter the intent" />
+              {!intent2.length?<Button title={"NA"} color={"grey"}></Button>:(realTimeText.toLowerCase().includes(intent2.toLowerCase())?<Button title={"detected"} color={"green"}></Button>:<Button title={"Non detected"} color={"red"}></Button>)}
+              </View>
             <ScrollView style={{ backgroundColor: "grey", width: "100%" }}>
               <View>
                 <Text style={{ fontSize: 18, color: "white" }}>{realTimeText}</Text>
