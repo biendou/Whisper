@@ -116,6 +116,7 @@ const App = () => {
   const stopSocketStreaming = async () => {
     setIsStreaming(!isStreaming)
     const audioFile = await AudioRecord.stop();
+    socket.current.emit("stream", "stop")
     console.log("file", audioFile)
     setIsRealTimeRecording(false)
   }
